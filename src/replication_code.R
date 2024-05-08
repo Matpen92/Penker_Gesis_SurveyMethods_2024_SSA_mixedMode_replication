@@ -15,10 +15,10 @@ library(rstanarm)
 
 # data data --------------------------------------------------------------------
 
-# load data from Aussda and add to the read_sav fucntion below
-# change names to own directories
+# download data from Aussda and add to the read_sav function below
+# SSA 2024 data will be available soon
+# change names to own directories 
 # https://aussda.at/sozialer-survey-oesterreich/
-
 
 ssoe23 <- 
   read_sav("data/26603012_extern(2).sav") |> 
@@ -34,6 +34,7 @@ ssoe24$quelle_fac <- factor(ssoe24$quelle, labels = c("CAWI", "Mail"))
 # data transform  --------------------------------------------------------------
 
 sum_across_vars <- function(df, vars) {
+  # sum score function
   selected_vars <- df[, vars, drop = FALSE]
   row_sums <- rowSums(selected_vars, na.rm = TRUE)
   return(row_sums)
@@ -41,17 +42,32 @@ sum_across_vars <- function(df, vars) {
 
 
 average_across_vars <- function(df, vars) {
+  # average score function
   selected_vars <- df[, vars, drop = FALSE]
   row_avgs <- rowMeans(selected_vars, na.rm = TRUE)
   return(row_avgs)
 }
 
 categorize_variable <- function(variable) {
+  # Define the breaks for the categories
   breaks <- c(-Inf, 30, 45, 60, 75, Inf)
+  # Define the labels for the categories
   labels <- c("18-29", "30-44", "45-59", "60-74", "75-high")
+  # Use the cut function to categorize the variable
   categories <- cut(variable, breaks=breaks, labels=labels, right=FALSE)
   return(categories)
 }
+
+categorize_variable_issp <- function(variable) {
+  # Define the breaks for the categories
+  breaks <- c(-Inf, 30, 40, 50, 60, 70, Inf)
+  # Define the labels for the categories
+  labels <- c("18-29", "30-39", "40-49", "50-59", "60-90", ">70")
+  # Use the cut function to categorize the variable
+  categories <- cut(variable, breaks=breaks, labels=labels, right=FALSE)
+  return(categories)
+}
+
 
 # variable count ----------------------------------------------------------
 
@@ -117,6 +133,8 @@ ssoe23$educ_three_cat_fac <- factor(ssoe23$educ_three_cat, labels = c("No Matura
                                                                 
 ssoe23$age_cat_five <- categorize_variable(ssoe23$age)
 
+# ssoe23$age_cat_issp <- categorize_variable_issp(ssoe23$age)
+
 table1(~ to_factor(D1) + age_cat_five  + educ_three_cat_fac   | quelle,
        render.missing = NULL,
        data = ssoe23)
@@ -171,6 +189,7 @@ table1(~educ_three_cat_fac  + age_cat_five +  as.factor(D1)  | quelle,
 
 # Representation bias -----------------------------------------------------
 
+# Define the function
 calculate_normalized_abs_diff <- function(p_bar, p) {
 
   normalized_abs_diffs <- abs((p_bar - p) / p)
@@ -308,24 +327,34 @@ grid.arrange(p1, p3, p2, p4, ncol=2)
 
 estimate_crude_mode_effects <- function(data, mode_var, dep_vars) {
   
+  # initialize an empty data frame to store results
   results <- data.frame()
   
+  # loop over all dependent variables
   for (var in dep_vars) {
+    # extract the variable label
     label <- label(data[[var]])
     
+    # standardize the data
     data[var] <- scale(data[[var]])
     data[mode_var] <- scale(data[[mode_var]])
+    # construct the formula for the lm() function
     formula <- as.formula(paste(var, "~", mode_var))
     
+    # run the linear regression
     regression <- lm(formula, data=data)
     
+    # get the estimated coefficient for the mode variable
     coef <- coefficients(regression)[mode_var]
     
+    # get the p-value for the mode variable
     summary_reg <- summary(regression)
     p_value <- summary_reg$coefficients[mode_var, 4]
     
+    # check if variable is significant
     significance <- ifelse(p_value < 0.05, "Significant", "Not Significant")
     
+    # create a data frame row with the results
     results_row <- data.frame("Dependent.Variable" = var, 
                               "Coefficient_crude" = coef, 
                               "P-value_crude" = p_value, 
@@ -356,8 +385,10 @@ results_crude_24 <- purrr::map_dfr(dep_vars_mode_resp_24, estimate_crude_mode_ef
 
 estimate_mode_effect <- function(var, data, mode_var, predictors, factors) {
   
+  # extract the variable label
   label <- label(data[[var]])
   
+  # extract value labels if var is a factor
   if("haven_labelled" %in% class(data[[var]])) {
     val_labels_var <- val_labels(data[[var]])
     if(length(val_labels_var) > 0){
@@ -372,20 +403,26 @@ estimate_mode_effect <- function(var, data, mode_var, predictors, factors) {
   }
   
   
+  # convert specified variables to factors
   data[factors] <- lapply(data[factors], as.factor)
   
+  # standardize the non-factor data
   non_factor_predictors <- setdiff(predictors, factors)
   data[var] <- scale(data[[var]])
   data[non_factor_predictors] <- lapply(data[non_factor_predictors], scale)
   
+  # construct the formula for the lm() function
   predictor_str <- paste(predictors, collapse=" + ")
   formula <- as.formula(paste(var, "~", predictor_str))
   
+  # run the linear regression
   regression <- lm(formula, data=data)
   
   
+  # get the estimated coefficient for the mode variable
   coef <- coefficients(regression)[mode_var]
   
+  # get the 95% confidence intervals for the mode variable
   conf_int <- confint(regression)[mode_var, ]
   
   # get the p-value for the mode variable
@@ -402,6 +439,7 @@ estimate_mode_effect <- function(var, data, mode_var, predictors, factors) {
                             "Standardized Coefficient" = coef,
                             "95% CI Lower" = conf_int[1],
                             "95% CI Upper" = conf_int[2],
+                            # "direction Effect" = coef_sign,
                             "P-value" = p_value, 
                             "Significance" = significance)
   
@@ -539,103 +577,8 @@ grid.arrange(p5, p6, ncol=1)
 
 # Item-non_response  -----------------------------------------------
 
-####
-
-# new import for missing non-response analysis
-
-ssoe23 <- read_sav("data/26603012_extern(2).sav")
-ssoe24 <- read_sav("data/26603015_extern.sav") 
-
-ssoe23 <- 
-  ssoe23 %>% 
-  mutate(educ_three_cat = case_when(
-    (D3_1 >= 1 & D3_1 < 6) | D3_1 == 8 ~ 1,
-    D3_1 == 6 | D3_1 == 7 | D3_1 == 15 ~2,
-    (D3_1 >= 9 & D3_1 <= 14 ~ 3)))
-
-
-ssoe23 <-
-  ssoe23 %>% 
-  mutate(D27_rec = case_when(
-    D27 == 1 ~ 1,
-    D27 == 2 ~ 2,
-    D27 == 3 ~ 3,
-    D27 == 4 ~ 4,
-    D27 == 5 ~ 5,
-    D27 >= 6 ~ 6,
-    is.na(D27) ~ 7))#
-
-ssoe23 <- 
-  ssoe23 %>% 
-  mutate(D24_rec = case_when(
-    D24 < 6 ~ 1,
-    D24 >= 6 & D24 <= 10 ~ 2,
-    D24 == 11 ~3,
-    is.na(D24) ~4))
-
-ssoe23 <- 
-  ssoe23 %>% 
-  mutate(D4_rec = case_when(
-    D4 == 1 | D4 == 2 ~ 1,
-    D4 > 2 ~2,
-    is.na(D4) ~3))
-
-
-ssoe23$educ_three_cat_fac <- factor(ssoe23$educ_three_cat, labels = c("No Matura", "Matura", "Univeristy"))
-
-ssoe23$age_cat_five <- categorize_variable(ssoe23$age)
-
-# ssoe23$age_cat_issp <- categorize_variable_issp(ssoe23$age)
-
-table1(~ to_factor(D1) + age_cat_five  + educ_three_cat_fac   | quelle,
-       render.missing = NULL,
-       data = ssoe23)
-
-## ssoe24 -----------------------------------------------------------------
-
-ssoe24 <- 
-  ssoe24 %>% 
-  mutate(educ_three_cat = case_when(
-    (D3X1 >= 1 & D3X1 < 6) | D3X1 == 8 ~ 1,
-    D3X1 == 6 | D3X1 == 7 | D3X1 == 9 | D3X1 == 16 ~2,
-    (D3X1 >= 10 & D3X1 <= 15 ~ 3)))
-
-ssoe24$educ_three_cat_fac <- factor(ssoe24$educ_three_cat, labels = c("No Matura", "Matura", "Univeristy"))
-
-ssoe24$age_cat_five <- categorize_variable(ssoe24$age)
-
-ssoe24 <-
-  ssoe24 %>% 
-  mutate(D29_rec = case_when(
-    D29 == 1 ~ 1,
-    D29 == 2 ~ 2,
-    D29 == 3 ~ 3,
-    D29 == 4 ~ 4,
-    D29 == 5 ~ 5,
-    D29 >= 6 ~ 6,
-    is.na(D29) ~ 7))#
-
-ssoe24 <- 
-  ssoe24 %>% 
-  mutate(D26_rec = case_when(
-    D26 < 6 ~ 1,
-    D26 >= 6 & D26 <= 10 ~ 2,
-    D26 == 11 ~3,
-    is.na(D26) ~4))
-
-ssoe24 <- 
-  ssoe24 %>% 
-  mutate(D4_rec = case_when(
-    D4 == 1 | D4 == 2 ~ 1,
-    D4 > 2 ~2,
-    is.na(D4) ~3))
-
-ssoe24 <- 
-  ssoe24 %>% 
-  mutate(educ_bin = ifelse(educ_three_cat > 1, 1, 0))
-
-
-#####
+ssoe23 <- read_sav("data/26603012_extern(2).sav") |> 
+  mutate(across(everything(), ~replace(., . %in% c(-8, -9, 999), NA)))
 
 average_non_response <- function(data, mode_var, dependent_vars) {
   # Convert the variable names to symbols for tidy evaluation
@@ -644,6 +587,7 @@ average_non_response <- function(data, mode_var, dependent_vars) {
   # Transform dependent variables to indicators
   data[dependent_vars] <- lapply(data[dependent_vars], function(x) ifelse(is.na(x), 1, 0))
   
+  # Calculate the average non-response proportion for each mode
   results <- data %>%
     group_by(!!mode_var) %>%
     summarise(across(all_of(dependent_vars), mean)) %>%
@@ -708,6 +652,11 @@ p9 <-
 p9
 
 ## 2024 --------------------------------------------------------------------
+
+# 2024 hier werden die missings gleich reingeladen obwohl nicht definiert
+# weil für mode analysen notwendig auszuschließen 
+
+ssoe24 <- read_sav("data/26603015_extern.sav", user_na = FALSE)
 
 average_non_response2 <- function(data, mode_var, dependent_vars) {
   mode_var <- ensym(mode_var)
@@ -1058,6 +1007,7 @@ estimate_mode_effect_nonresponse_bayesian_hetero <- function(var, data) {
   exp_quelle_coef_estimate <- exp(quelle_coef_estimate)  # Convert to odds ratio
   print(paste("Exp Quelle Coef Estimate:", exp_quelle_coef_estimate))
   
+  # Assuming placeholders for these functions; add print statements similarly if they exist
   p_d <- 
     pd(fit) %>% 
     filter(Parameter == "quelle:age") 
@@ -1094,9 +1044,9 @@ p14 <-
   ggplot(aes(x = round(EstimateOddsRatio, digits = 3))) + 
   geom_density(alpha = 0.6, adjust = 1, fill = "#7D3C98") +  # Adjusted for purple fill
   labs(
-    x = "Odds Ratio (1= missing, 0 = no missing)", 
+    x = "Odds Ratios (1= missing, 0 = no missing)", 
     y = "Density", 
-    title = "Social Survey Austria 2023"
+    title = "Social Survey Austria 2023: Age x Survey Mode"
   ) +
   theme_minimal() +
   scale_x_continuous(limits = c(0.75, 1.5)) + 
@@ -1115,7 +1065,8 @@ estimate_mode_effect_nonresponse_bayesian_hetero_24 <- function(var, data) {
   
   options(mc.cores = parallel::detectCores())
   
-  # no factor for quelle or function breaks 
+  # no factor for qulle or function breaks 
+  # Convert the necessary variables to factors within the data argument directly
   data$educ_three_cat_fac <- factor(data$educ_three_cat_fac)
   data$D4_rec <- factor(data$D4_rec)
   data$D26_rec <- factor(data$D26_rec)
@@ -1124,6 +1075,7 @@ estimate_mode_effect_nonresponse_bayesian_hetero_24 <- function(var, data) {
   # Transform 'var' into binary indicating missingness
   data[[var]] <- ifelse(data[[var]] %in% c(-8, -9, -4, 999999), 1, 0)
   
+  # Remove rows with any missing values in the variables used in the model
   relevant_variables <- c("quelle", "D1", "educ_three_cat_fac", "age", "D4_rec", "D26_rec", "D29_rec", "D34", "Q1", var)
   relevant_data <- na.omit(data[relevant_variables])
   
@@ -1133,6 +1085,7 @@ estimate_mode_effect_nonresponse_bayesian_hetero_24 <- function(var, data) {
     return(NULL)
   }
   
+  # Construct the formula for the model with interactions
   formula_str <- paste(var, "~ quelle*age+  quelle + D1 + educ_three_cat_fac + age + as.factor(D4_rec) +
                        as.factor(D26_rec) + as.factor(D29_rec) + D34 + Q1")
   formula <- as.formula(formula_str)
@@ -1155,6 +1108,7 @@ estimate_mode_effect_nonresponse_bayesian_hetero_24 <- function(var, data) {
   exp_quelle_coef_estimate <- exp(quelle_coef_estimate)  # Convert to odds ratio
   print(paste("Exp Quelle Coef Estimate:", exp_quelle_coef_estimate))
   
+  # Assuming placeholders for these functions; add print statements similarly if they exist
   p_d <- 
     pd(fit) %>% 
     filter(Parameter == "quelle:age") 
@@ -1196,9 +1150,9 @@ p15 <-
   ggplot(aes(x = round(EstimateOddsRatio, digits = 3))) + 
   geom_density(alpha = 0.6, adjust = 1, fill = "#7D3C98") +  # Adjusted for purple fill
   labs(
-    x = "Odds Ratio (1= missing, 0 = no missing)", 
+    x = "Odds Ratios (1= missing, 0 = no missing)", 
     y = "Density", 
-    title = "Social Survey Austria 2024"
+    title = "Social Survey Austria 2024: Age x Survey Mode"
   ) +
   theme_minimal() +
   scale_x_continuous(limits = c(0.75, 1.5)) + 
@@ -1251,6 +1205,7 @@ m_f4d <- stan_glm(f4d_miss ~  quelle_fac + quelle_fac*age + D1 + educ_three_cat_
 tab_model(m_f4d)
 
 
+
 # heterogenous mode effects: education  -----------------------------------------------
 
 ssoe23$educ_bin <- ifelse(ssoe23$educ_three_cat == 1,0,1) 
@@ -1273,11 +1228,14 @@ estimate_mode_effect_nonresponse_bayesian_hetero_educ_23 <- function(var, data) 
   data$D24_rec <- factor(data$D24_rec)
 
   
+  # Transform 'var' into binary indicating missingness
   data[[var]] <- ifelse(is.na(data[[var]]), 1, 0)
   
+  # Remove rows with any missing values in the variables used in the model
   relevant_variables <- c("quelle", "D1", "educ_bin", "age", "D4_rec", "D27_rec", "D24_rec", "D45", var)
   relevant_data <- na.omit(data[relevant_variables])
   
+  # Construct the formula for the model with interactions
   formula_str <- paste(var, "~ quelle*educ_bin +  quelle + D1 + educ_bin + age + as.factor(D4_rec) +
                        as.factor(D27_rec) + as.factor(D24_rec) + D45")
   formula <- as.formula(formula_str)
@@ -1290,6 +1248,7 @@ estimate_mode_effect_nonresponse_bayesian_hetero_educ_23 <- function(var, data) 
   
   t_prior <- student_t(df = 7, location = 0, scale = 1)
   
+  # Fit the Bayesian logistic regression model
   fit <- stan_glm(formula, 
                   data = relevant_data, 
                   family = binomial(), 
@@ -1306,6 +1265,7 @@ estimate_mode_effect_nonresponse_bayesian_hetero_educ_23 <- function(var, data) 
   exp_quelle_coef_estimate <- exp(quelle_coef_estimate)  # Convert to odds ratio
   print(paste("Exp Quelle Coef Estimate:", exp_quelle_coef_estimate))
   
+  # Assuming placeholders for these functions; add print statements similarly if they exist
   p_d <- 
     pd(fit) %>% 
     filter(Parameter == "quelle:educ_binTertiary") 
@@ -1385,22 +1345,26 @@ estimate_mode_effect_nonresponse_bayesian_hetero_educ_24 <- function(var, data) 
   
   options(mc.cores = parallel::detectCores())
   
-  # no factor for qeulle or function breaks 
+  # no factor for qulle or function breaks 
   # Convert the necessary variables to factors within the data argument directly
   data$educ_bin <- factor(data$educ_bin, labels = c("No Secondary", "Tertiary"))
   data$D4_rec <- factor(data$D4_rec)
   data$D26_rec <- factor(data$D26_rec)
   data$D29_rec <- factor(data$D29_rec)
   
+  # Transform 'var' into binary indicating missingness
   data[[var]] <- ifelse(data[[var]] %in% c(-8, -9, -4, 999999), 1, 0)
   
+  # Remove rows with any missing values in the variables used in the model
   relevant_variables <- c("quelle", "D1", "educ_bin", "age", "D4_rec", "D26_rec", "D29_rec", "D34", "Q1", var)
   relevant_data <- na.omit(data[relevant_variables])
   
+  # Construct the formula for the model with interactions
   formula_str <- paste(var, "~ quelle*educ_bin+  quelle + D1 + educ_bin + age + as.factor(D4_rec) +
                        as.factor(D26_rec) + as.factor(D29_rec) + D34 + Q1")
   formula <- as.formula(formula_str)
   
+  # Check for perfect separation
   if(any(table(relevant_data[[var]], relevant_data$quelle) == 0)) {
     print(warning("Perfect separation detected. Model fitting not performed."))
     return(NULL)
@@ -1408,6 +1372,7 @@ estimate_mode_effect_nonresponse_bayesian_hetero_educ_24 <- function(var, data) 
   
   t_prior <- student_t(df = 7, location = 0, scale = 1)
   
+  # Fit the Bayesian logistic regression model
   fit <- stan_glm(formula, 
                   data = relevant_data, 
                   family = binomial(), 
@@ -1423,6 +1388,7 @@ estimate_mode_effect_nonresponse_bayesian_hetero_educ_24 <- function(var, data) 
   exp_quelle_coef_estimate <- exp(quelle_coef_estimate)  # Convert to odds ratio
   print(paste("Exp Quelle Coef Estimate:", exp_quelle_coef_estimate))
   
+  # Assuming placeholders for these functions; add print statements similarly if they exist
   p_d <- 
     pd(fit) %>% 
     filter(Parameter == "quelle:educ_binTertiary") 
@@ -1458,6 +1424,8 @@ results_23_het_educ <- readRDS("output/präsis/gesis_präsi/ssoe23_bayes_non_res
 results_24_het_educ %>% 
   filter(p_val < 0.05)
 
+
+
 1 / 137
 
 p16 <- 
@@ -1465,7 +1433,7 @@ p16 <-
   ggplot(aes(x = round(EstimateOddsRatio, digits = 3))) + 
   geom_density(alpha = 0.6, adjust = 1, fill = "#7D3C98") +  # Adjusted for purple fill
   labs(
-    x = "Odds Ratio (1= missing, 0 = no missing)", 
+    x = "Odds Ratios (1= missing, 0 = no missing)", 
     y = "Density", 
     title = "Social Survey Austria 2023"
   ) +
