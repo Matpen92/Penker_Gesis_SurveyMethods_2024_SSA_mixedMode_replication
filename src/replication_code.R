@@ -68,6 +68,28 @@ categorize_variable_issp <- function(variable) {
   return(categories)
 }
 
+create_barplot <- function(unadjusted_diff, adjusted_diff, plot_title) {
+  df <- data.frame(
+    Category = factor(c("Unadjusted", "Adjusted"), 
+                      levels = c("Unadjusted", "Adjusted")),
+    Percentage = c(unadjusted_diff, adjusted_diff)
+  )
+  
+  # Create the barplot
+  ggplot(df, aes(x = Category, y = Percentage, fill = Category)) +
+    geom_bar(stat = "identity", alpha = 0.6) +
+    scale_fill_manual(values = c("Unadjusted" = "#000000", "Adjusted" = "#332288")) +
+    theme_bw() +
+    labs(title = plot_title, x = "", y = "N Significant Differences") +
+    theme(
+      legend.position = "none",
+      text = element_text(size = 18),          # Increase font size for all text elements
+      plot.title = element_text(size = 20), # Center the plot title
+      axis.title = element_text(size = 18),    # Increase font size for axis titles
+      axis.text = element_text(size = 18)      # Increase font size for axis text
+    )
+}
+
 
 # variable count ----------------------------------------------------------
 
@@ -506,6 +528,7 @@ p5 <-
     legend.title = element_blank() 
   )
 
+p5a <- create_barplot(68, 19, "Social Survey Austrian 2023")
 
 ## 2024 --------------------------------------------------------------------
 
@@ -569,9 +592,18 @@ p6 <-
 results_net_24 %>% 
   filter(Significance == "Significant") %>% view()
 
+p6a <- create_barplot(59, 28, "Social Survey Austrian 2024")
+
 ###
 
-grid.arrange(p5, p6, ncol=1)
+###
+
+p00 <- p5 / p6 + plot_layout(guides = 'collect') 
+p0 <- (p5a / p6a)
+p00 | p0
+
+
+###
 
 ###
 
@@ -653,8 +685,9 @@ p9
 
 ## 2024 --------------------------------------------------------------------
 
-# 2024 hier werden die missings gleich reingeladen obwohl nicht definiert
-# weil für mode analysen notwendig auszuschließen 
+# load data again since average_non_response2 works with 
+# (-8, -9, -4, 999999) and not NAs -->  not the smartest decision
+# but too late for modification :)
 
 ssoe24 <- read_sav("data/26603015_extern.sav", user_na = FALSE)
 
@@ -727,8 +760,9 @@ p11 <-
 
 ###
 
-grid.arrange(p8, p10, ncol=1)
-grid.arrange(p9, p11, ncol=1)
+p8 / p10
+
+p9 / p11 +  plot_layout(guides = 'collect') 
 
 ###
 
@@ -1135,15 +1169,8 @@ results_24_het_age <- purrr::map_dfr(dep_vars_mode_non_resp_24,
                                  data = ssoe24) %>% 
   as_tibble()
 
-write_rds(results_24_het_age, "output/präsis/gesis_präsi/ssoe24_bayes_non_resp_het_age.rds")
-
-results_24_het_age <- readRDS("output/präsis/gesis_präsi/ssoe24_bayes_non_resp_het_age.rds")
-
 results_24_het_age %>% 
   filter(p_val < 0.05)
-
-
-9 / 137
 
 p15 <- 
   results_24_het_age %>%
@@ -1160,284 +1187,7 @@ p15 <-
 
 ###
 
-grid.arrange(p14, p15, ncol=1)
+p14 / p15
 
 ###
-
-
-#### interact plot and check -------------------------------------------------
-
-#2023
-
-t_prior <- student_t(df = 7, location = 0, scale = 1)
-ssoe23$quelle_fac <- factor(ssoe23$quelle, labels = c("CAWI", "Mail"))
-ssoe23$f4d_miss <- ifelse(is.na(ssoe23$f4d), 1,0)
-
-m_f4d <- stan_glm(f4d_miss ~  quelle_fac + quelle_fac*age + D1 + educ_three_cat_fac + age +
-                    as.factor(D4_rec) +as.factor(D27_rec) +
-                    as.factor(D24_rec) + D45 ,  
-                   data = ssoe23, 
-                   family = binomial(), 
-                   prior = t_prior, 
-                   prior_intercept = cauchy(0, 10),
-                   chains = 4, iter = 3000, 
-                   control = list(adapt_delta = 0.9999)) #n.s.
-tab_model(m_f4d)
-
-plot_model(m_f4d, type ="int", mdrt.values = "meansd")
-
-#2024
-
-t_prior <- student_t(df = 7, location = 0, scale = 1)
-ssoe24$quelle_fac <- factor(ssoe24$quelle, labels = c("CAWI", "Mail"))
-
-ssoe24$Q11_2 <- ifelse(is.na(ssoe24$f4d), 1,0)
-
-m_f4d <- stan_glm(f4d_miss ~  quelle_fac + quelle_fac*age + D1 + educ_three_cat_fac + age +
-                    as.factor(D4_rec) +as.factor(D27_rec) + 
-                    as.factor(D24_rec) + D45 ,  
-                  data = ssoe23, 
-                  family = binomial(), 
-                  prior = t_prior, 
-                  prior_intercept = cauchy(0, 10),
-                  chains = 4, iter = 3000, 
-                  control = list(adapt_delta = 0.9999)) #n.s.
-tab_model(m_f4d)
-
-
-
-# heterogenous mode effects: education  -----------------------------------------------
-
-ssoe23$educ_bin <- ifelse(ssoe23$educ_three_cat == 1,0,1) 
-ssoe24$educ_bin <- ifelse(ssoe24$educ_three_cat == 1,0,1) 
-ssoe23$educ_bin <- factor(ssoe23$educ_bin, labels = c("No Secondary", "Tertiary"))
-t_prior <- student_t(df = 7, location = 0, scale = 1)
-
-## 2023 --------------------------------------------------------------------
-
-estimate_mode_effect_nonresponse_bayesian_hetero_educ_23 <- function(var, data) {
-  print("Start of function")
-  
-  options(mc.cores = parallel::detectCores())
-  
-  # no factor for qulle or function breaks 
-  # Convert the necessary variables to factors within the data argument directly
-  data$educ_bin <- factor(data$educ_bin, labels = c("No Secondary", "Tertiary"))
-  data$D4_rec <- factor(data$D4_rec)
-  data$D27_rec <- factor(data$D27_rec)
-  data$D24_rec <- factor(data$D24_rec)
-
-  
-  # Transform 'var' into binary indicating missingness
-  data[[var]] <- ifelse(is.na(data[[var]]), 1, 0)
-  
-  # Remove rows with any missing values in the variables used in the model
-  relevant_variables <- c("quelle", "D1", "educ_bin", "age", "D4_rec", "D27_rec", "D24_rec", "D45", var)
-  relevant_data <- na.omit(data[relevant_variables])
-  
-  # Construct the formula for the model with interactions
-  formula_str <- paste(var, "~ quelle*educ_bin +  quelle + D1 + educ_bin + age + as.factor(D4_rec) +
-                       as.factor(D27_rec) + as.factor(D24_rec) + D45")
-  formula <- as.formula(formula_str)
-  
-  # Check for perfect separation
-  if(any(table(relevant_data[[var]], relevant_data$quelle) == 0)) {
-    print(warning("Perfect separation detected. Model fitting not performed."))
-    return(NULL)
-  }
-  
-  t_prior <- student_t(df = 7, location = 0, scale = 1)
-  
-  # Fit the Bayesian logistic regression model
-  fit <- stan_glm(formula, 
-                  data = relevant_data, 
-                  family = binomial(), 
-                  prior = t_prior, 
-                  prior_intercept = cauchy(0, 10),
-                  seed = 2222,
-                  chains = 4, iter = 3000, 
-                  control = list(adapt_delta = 0.9999))
-  
-  print(paste("Variable:", var))
-  quelle_coef_estimate <- fit$coefficients["quelle:educ_binTertiary"]
-  print(paste("Quelle Coef Estimate:", quelle_coef_estimate))
-  
-  exp_quelle_coef_estimate <- exp(quelle_coef_estimate)  # Convert to odds ratio
-  print(paste("Exp Quelle Coef Estimate:", exp_quelle_coef_estimate))
-  
-  # Assuming placeholders for these functions; add print statements similarly if they exist
-  p_d <- 
-    pd(fit) %>% 
-    filter(Parameter == "quelle:educ_binTertiary") 
-  p_direction_check <- p_d$pd
-  
-  print(paste("P Direction Check:", p_direction_check))
-  
-  freq_p_val <- pd_to_p(p_direction_check)
-  print(paste("Frequency P Value:", freq_p_val))
-  
-  # Create a dataframe row with the results
-  results_row <- data.frame(
-    DependentVariable = var, 
-    EstimateOddsRatio = exp_quelle_coef_estimate, 
-    p_direction = p_direction_check,
-    p_val = freq_p_val
-  )
-  
-  return(results_row)
-}
-
-
-results_23_het_educ_test <- purrr::map_dfr(dep_vars_mode_non_resp_23, 
-                                           estimate_mode_effect_nonresponse_bayesian_hetero_educ_23,
-                                           data = ssoe23) %>% 
-  as_tibble()
-
-write_rds(results_23_het_educ_test, "output/präsis/gesis_präsi/ssoe23_bayes_non_resp_het_educ.rds")
-
-results_23_het_educ <- readRDS("output/präsis/gesis_präsi/ssoe23_bayes_non_resp_het_educ.rds")
-
-results_23_het_educ_test %>% 
-  filter(p_val < 0.05)
-
-1 / 127
-
-p16 <- 
-  results_23_het_educ %>%
-  ggplot(aes(x = round(EstimateOddsRatio, digits = 3))) + 
-  geom_density(alpha = 0.6, adjust = 1, fill = "#7D3C98") +  # Adjusted for purple fill
-  labs(
-    x = "Odds Ratio (1= missing, 0 = no missing)", 
-    y = "Density", 
-    title = "Social Survey Austria 2023"
-  ) +
-  theme_minimal() +
-  scale_x_continuous(limits = c(0.75, 1.5)) + 
-  theme(legend.title = element_blank())
-
-####
-
-ssoe23$quelle <- factor(ssoe23$quelle)
-
-t_prior <- student_t(df = 7, location = 0, scale = 1)
-
-ssoe23$f0i3 <- ifelse(is.na(ssoe23$f0i3), 1,0)
-
-m_q11c <- stan_glm(f0i3 ~ quelle*educ_bin + quelle  + D1 + educ_bin + age + as.factor(D4_rec) +
-                     as.factor(D27_rec) + as.factor(D24_rec) + D45 ,  
-                   data = ssoe23, 
-                   family = binomial(), 
-                   prior = t_prior, 
-                   seed = 111,
-                   prior_intercept = cauchy(0, 10),
-                   chains = 4, iter = 3000, 
-                   control = list(adapt_delta = 0.9999)) #n.s.
-
-plot_model(m_q11c, type ="int", mdrt.values = "meansd")
-
-
-## 2024 --------------------------------------------------------------------
-
-library(rstanarm)
-
-estimate_mode_effect_nonresponse_bayesian_hetero_educ_24 <- function(var, data) {
-  print("Start of function")
-  
-  options(mc.cores = parallel::detectCores())
-  
-  # no factor for qulle or function breaks 
-  # Convert the necessary variables to factors within the data argument directly
-  data$educ_bin <- factor(data$educ_bin, labels = c("No Secondary", "Tertiary"))
-  data$D4_rec <- factor(data$D4_rec)
-  data$D26_rec <- factor(data$D26_rec)
-  data$D29_rec <- factor(data$D29_rec)
-  
-  # Transform 'var' into binary indicating missingness
-  data[[var]] <- ifelse(data[[var]] %in% c(-8, -9, -4, 999999), 1, 0)
-  
-  # Remove rows with any missing values in the variables used in the model
-  relevant_variables <- c("quelle", "D1", "educ_bin", "age", "D4_rec", "D26_rec", "D29_rec", "D34", "Q1", var)
-  relevant_data <- na.omit(data[relevant_variables])
-  
-  # Construct the formula for the model with interactions
-  formula_str <- paste(var, "~ quelle*educ_bin+  quelle + D1 + educ_bin + age + as.factor(D4_rec) +
-                       as.factor(D26_rec) + as.factor(D29_rec) + D34 + Q1")
-  formula <- as.formula(formula_str)
-  
-  # Check for perfect separation
-  if(any(table(relevant_data[[var]], relevant_data$quelle) == 0)) {
-    print(warning("Perfect separation detected. Model fitting not performed."))
-    return(NULL)
-  }
-  
-  t_prior <- student_t(df = 7, location = 0, scale = 1)
-  
-  # Fit the Bayesian logistic regression model
-  fit <- stan_glm(formula, 
-                  data = relevant_data, 
-                  family = binomial(), 
-                  prior = t_prior, 
-                  prior_intercept = cauchy(0, 10),
-                  chains = 4, iter = 3000, 
-                  control = list(adapt_delta = 0.9999))
-  
-  print(paste("Variable:", var))
-  quelle_coef_estimate <- fit$coefficients["quelle:educ_binTertiary"]
-  print(paste("Quelle Coef Estimate:", quelle_coef_estimate))
-  
-  exp_quelle_coef_estimate <- exp(quelle_coef_estimate)  # Convert to odds ratio
-  print(paste("Exp Quelle Coef Estimate:", exp_quelle_coef_estimate))
-  
-  # Assuming placeholders for these functions; add print statements similarly if they exist
-  p_d <- 
-    pd(fit) %>% 
-    filter(Parameter == "quelle:educ_binTertiary") 
-  p_direction_check <- p_d$pd
-  
-  print(paste("P Direction Check:", p_direction_check))
-  
-  freq_p_val <- pd_to_p(p_direction_check)
-  print(paste("Frequency P Value:", freq_p_val))
-  
-  # Create a dataframe row with the results
-  results_row <- data.frame(
-    DependentVariable = var, 
-    EstimateOddsRatio = exp_quelle_coef_estimate, 
-    p_direction = p_direction_check,
-    p_val = freq_p_val
-  )
-  
-  return(results_row)
-}
-
-results_24_het_educ <- purrr::map_dfr(dep_vars_mode_non_resp_24,
-                                     estimate_mode_effect_nonresponse_bayesian_hetero_educ_24, 
-                                     data = ssoe24) %>% 
-  as_tibble()
-
-
-
-write_rds(results_24_het_educ, "output/präsis/gesis_präsi/ssoe24_bayes_non_resp_het_educ.rds")
-
-results_23_het_educ <- readRDS("output/präsis/gesis_präsi/ssoe23_bayes_non_resp_het_educ.rds")
-
-results_24_het_educ %>% 
-  filter(p_val < 0.05)
-
-
-
-1 / 137
-
-p16 <- 
-  results_23_het_educ %>%
-  ggplot(aes(x = round(EstimateOddsRatio, digits = 3))) + 
-  geom_density(alpha = 0.6, adjust = 1, fill = "#7D3C98") +  # Adjusted for purple fill
-  labs(
-    x = "Odds Ratios (1= missing, 0 = no missing)", 
-    y = "Density", 
-    title = "Social Survey Austria 2023"
-  ) +
-  theme_minimal() +
-  scale_x_continuous(limits = c(0.75, 1.5)) + 
-  theme(legend.title = element_blank())
 
